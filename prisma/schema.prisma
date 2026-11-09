@@ -1,0 +1,260 @@
+// Modèle physique de données (MPD) de l'application de gestion hôtelière.
+// Il traduit le MLD décrit dans docs/mcd-mld.md.
+//
+// Conventions :
+//  - les tables sont en minuscules (@@map) pour se comporter de la même façon
+//    sous Windows et sous Linux, où MySQL distingue la casse des noms de tables ;
+//  - les montants sont des entiers en FCFA (pas de décimales) ;
+//  - les dates prévues sont des jours (@db.Date), les dates effectives des instants ;
+//  - onDelete: Restrict protège toutes les données historiques.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Énumérations
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  RECEPTIONNISTE
+  COMPTABLE
+  RESPONSABLE
+}
+
+enum Sexe {
+  MASCULIN
+  FEMININ
+}
+
+enum TypePiece {
+  CNI
+  PASSEPORT
+  PERMIS
+  AUTRE
+}
+
+enum EtatChambre {
+  DISPONIBLE
+  OCCUPEE
+  NETTOYAGE
+  HORS_SERVICE
+}
+
+enum StatutReservation {
+  CONFIRMEE
+  ANNULEE
+  HONOREE
+}
+
+enum StatutSejour {
+  EN_COURS
+  TERMINE
+}
+
+enum ModePaiement {
+  ESPECES
+  MOBILE_MONEY
+  CARTE
+  VIREMENT
+}
+
+// ---------------------------------------------------------------------------
+// Utilisateurs et traçabilité
+// ---------------------------------------------------------------------------
+
+/// Compte d'un employé. On désactive un compte, on ne le supprime jamais (RG1).
+model Utilisateur {
+  id                Int       @id @default(autoincrement())
+  nom               String    @db.VarChar(100)
+  prenoms           String    @db.VarChar(150)
+  email             String    @unique @db.VarChar(191)
+  /// Hash bcrypt : ne doit jamais être renvoyé au navigateur.
+  motDePasse        String    @db.VarChar(255)
+  telephone         String    @db.VarChar(20)
+  actif             Boolean   @default(true)
+  role              Role
+  creeLe            DateTime  @default(now())
+  derniereConnexion DateTime?
+
+  reservationsCreees   Reservation[]     @relation("ReservationCreePar")
+  arriveesEnregistrees Sejour[]          @relation("SejourArriveePar")
+  departsEnregistres   Sejour[]          @relation("SejourDepartPar")
+  paiementsEnregistres Paiement[]
+  journal              JournalActivite[]
+
+  @@map("utilisateur")
+}
+
+/// Trace de chaque action sensible (RG13).
+model JournalActivite {
+  id            Int      @id @default(autoincrement())
+  utilisateurId Int
+  action        String   @db.VarChar(50)
+  details       Json?
+  date          DateTime @default(now())
+
+  utilisateur Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Restrict)
+
+  @@index([utilisateurId])
+  @@index([date])
+  @@map("journal_activite")
+}
+
+/// Configuration clé/valeur : nom de l'hôtel, adresse, téléphone, heure de libération.
+model Parametre {
+  cle    String @id @db.VarChar(100)
+  valeur String @db.VarChar(255)
+
+  @@map("parametre")
+}
+
+// ---------------------------------------------------------------------------
+// Clients
+// ---------------------------------------------------------------------------
+
+model Client {
+  id            Int       @id @default(autoincrement())
+  nom           String    @db.VarChar(100)
+  prenoms       String    @db.VarChar(150)
+  sexe          Sexe
+  dateNaissance DateTime? @db.Date
+  nationalite   String    @db.VarChar(80)
+  typePiece     TypePiece
+  numeroPiece   String    @db.VarChar(50)
+  telephone     String    @db.VarChar(20)
+  email         String?   @db.VarChar(191)
+  adresse       String?   @db.VarChar(255)
+  creeLe        DateTime  @default(now())
+
+  reservations Reservation[]
+  sejours      Sejour[]
+
+  @@index([nom])
+  @@index([telephone])
+  @@index([numeroPiece])
+  @@map("client")
+}
+
+// ---------------------------------------------------------------------------
+// Chambres
+// ---------------------------------------------------------------------------
+
+model TypeChambre {
+  id          Int     @id @default(autoincrement())
+  libelle     String  @unique @db.VarChar(50)
+  description String? @db.VarChar(255)
+  capacite    Int
+  tarifNuit   Int
+
+  chambres Chambre[]
+
+  @@map("type_chambre")
+}
+
+model Chambre {
+  id     Int         @id @default(autoincrement())
+  numero String      @unique @db.VarChar(10)
+  etage  Int
+  etat   EtatChambre @default(DISPONIBLE)
+  typeId Int
+
+  type         TypeChambre   @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  reservations Reservation[]
+  sejours      Sejour[]
+
+  @@index([typeId])
+  @@index([etat])
+  @@map("chambre")
+}
+
+// ---------------------------------------------------------------------------
+// Réservations, séjours, paiements
+// ---------------------------------------------------------------------------
+
+model Reservation {
+  id                Int               @id @default(autoincrement())
+  /// Code lisible de la forme RES-2026-0001.
+  code              String            @unique @db.VarChar(20)
+  clientId          Int
+  chambreId         Int
+  dateArriveePrevue DateTime          @db.Date
+  dateDepartPrevue  DateTime          @db.Date
+  nbPersonnes       Int
+  /// Copie du tarif au moment de la réservation (RG6).
+  tarifNuitApplique Int
+  statut            StatutReservation @default(CONFIRMEE)
+  motifAnnulation   String?           @db.VarChar(255)
+  creeLe            DateTime          @default(now())
+  creeParId         Int
+
+  client  Client      @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  chambre Chambre     @relation(fields: [chambreId], references: [id], onDelete: Restrict)
+  creePar Utilisateur @relation("ReservationCreePar", fields: [creeParId], references: [id], onDelete: Restrict)
+  sejour  Sejour?
+
+  @@index([clientId])
+  @@index([creeParId])
+  // Index de la vérification de disponibilité (RG4).
+  @@index([chambreId, statut, dateArriveePrevue, dateDepartPrevue])
+  @@index([statut, dateArriveePrevue])
+  @@map("reservation")
+}
+
+/// Un séjour naît d'une réservation, ou sans réservation pour un walk-in (RG7).
+model Sejour {
+  id                   Int          @id @default(autoincrement())
+  reservationId        Int?         @unique
+  clientId             Int
+  chambreId            Int
+  dateArriveeEffective DateTime
+  dateDepartPrevue     DateTime     @db.Date
+  dateDepartEffective  DateTime?
+  /// Copie du tarif au moment de l'arrivée (RG6).
+  tarifNuitApplique    Int
+  /// Trop-perçu rendu au client lors d'un départ anticipé (FCFA).
+  montantRembourse     Int          @default(0)
+  statut               StatutSejour @default(EN_COURS)
+  arriveeParId         Int
+  departParId          Int?
+
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  client      Client       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  chambre     Chambre      @relation(fields: [chambreId], references: [id], onDelete: Restrict)
+  arriveePar  Utilisateur  @relation("SejourArriveePar", fields: [arriveeParId], references: [id], onDelete: Restrict)
+  departPar   Utilisateur? @relation("SejourDepartPar", fields: [departParId], references: [id], onDelete: Restrict)
+  paiements   Paiement[]
+
+  @@index([clientId])
+  @@index([arriveeParId])
+  @@index([departParId])
+  // Index de la vérification de disponibilité (RG4).
+  @@index([chambreId, statut, dateArriveeEffective, dateDepartPrevue])
+  @@index([statut])
+  @@map("sejour")
+}
+
+model Paiement {
+  id              Int          @id @default(autoincrement())
+  sejourId        Int
+  montant         Int
+  mode            ModePaiement
+  reference       String?      @db.VarChar(100)
+  datePaiement    DateTime     @default(now())
+  enregistreParId Int
+
+  sejour        Sejour      @relation(fields: [sejourId], references: [id], onDelete: Restrict)
+  enregistrePar Utilisateur @relation(fields: [enregistreParId], references: [id], onDelete: Restrict)
+
+  @@index([sejourId])
+  @@index([enregistreParId])
+  @@index([datePaiement])
+  @@index([mode])
+  @@map("paiement")
+}

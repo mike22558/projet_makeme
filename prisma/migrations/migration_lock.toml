@@ -1,0 +1,2 @@
+# Fichier géré par Prisma Migrate : ne pas modifier.
+provider = "mysql"

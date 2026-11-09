@@ -1,0 +1,23 @@
+import type { Role } from "@prisma/client";
+import type { DefaultSession } from "next-auth";
+
+// Ajoute l'identifiant et le rôle aux types fournis par Auth.js.
+declare module "next-auth" {
+  interface User {
+    role: Role;
+  }
+
+  interface Session {
+    user: {
+      id: string;
+      role: Role;
+    } & DefaultSession["user"];
+  }
+}
+
+declare module "@auth/core/jwt" {
+  interface JWT {
+    id: string;
+    role: Role;
+  }
+}

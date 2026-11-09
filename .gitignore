@@ -1,0 +1,16 @@
+# Dépendances
+node_modules/
+
+# Build Next.js
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Variables d'environnement (seul .env.example est versionné)
+.env
+.env.local
+.env.*.local
+
+# Journaux
+npm-debug.log*
